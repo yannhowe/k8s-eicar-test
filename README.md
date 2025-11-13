@@ -133,3 +133,24 @@ curl -f -X POST \
 ```
 
 The server responds with the on-disk path, which you can later verify via `kubectl exec` or by inspecting the persistent volume.
+
+### Verifying uploads in the cluster
+
+1. **Find the pod** (adjust the label selector if you renamed the release):
+   ```bash
+   kubectl get pods -l app.kubernetes.io/name=eicar-upload
+   POD=$(kubectl get pods -l app.kubernetes.io/name=eicar-upload -o jsonpath='{.items[0].metadata.name}')
+   ```
+2. **List uploaded files** inside the container (defaults to `/data/uploads` unless you changed `upload.path`):
+   ```bash
+   kubectl exec "$POD" -- ls -l /data/uploads
+   ```
+3. **Inspect the file contents or checksum** to confirm the payload:
+   ```bash
+   kubectl exec "$POD" -- sha256sum /data/uploads/eicar-<timestamp>.com
+   # or
+   kubectl exec "$POD" -- cat /data/uploads/eicar-<timestamp>.com
+   ```
+4. **If using a PVC**, you can also inspect the mounted claim from any other pod or via your storage backend’s tooling.
+
+For local Docker testing with `-v $(pwd)/uploads:/data/uploads`, simply check the `uploads/` directory on your host.
