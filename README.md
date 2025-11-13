@@ -26,18 +26,20 @@ Run it locally:
 docker run --rm -p 8080:8080 -e UPLOAD_DIR=/data/uploads -v $(pwd)/uploads:/data/uploads eicar-upload:local
 ```
 
+> Prefer to skip building? A ready-to-use image is published at `docker.io/yannhowe/eicar-upload:latest`.
+
 ## Helm deployment
 
 The Helm chart lives in `charts/eicar-upload`.
 
-1. (Optional) Push the image to a registry your cluster can reach.
-2. Update `values.yaml` (or use `--set/--values`) with your image reference and any persistence tweaks.
+1. Decide which container image to run. The published default is `yannhowe/eicar-upload:latest`, but you can build/push your own and override `image.repository` + `image.tag`.
+2. Update `values.yaml` (or use `--set/--values`) with any persistence or ingress tweaks you need.
 3. Install:
 
    ```bash
    helm install eicar charts/eicar-upload \
-     --set image.repository=REGISTRY/eicar-upload \
-     --set image.tag=TAG
+     --set image.repository=yannhowe/eicar-upload \
+     --set image.tag=latest
    ```
 
 ### Persistence options
@@ -46,8 +48,8 @@ By default the release uses an `emptyDir` volume. To keep uploads across pod res
 
 ```bash
 helm install eicar charts/eicar-upload \
-  --set image.repository=REGISTRY/eicar-upload \
-  --set image.tag=TAG \
+  --set image.repository=yannhowe/eicar-upload \
+  --set image.tag=latest \
   --set upload.persistence.enabled=true \
   --set upload.persistence.size=5Gi
 ```
