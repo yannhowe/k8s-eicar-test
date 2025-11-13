@@ -1,0 +1,20 @@
+{{- if and .Values.upload.persistence.enabled (not .Values.upload.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "eicar-upload.fullname" . }}-data
+  labels:
+    app.kubernetes.io/name: {{ include "eicar-upload.name" . }}
+    helm.sh/chart: {{ include "eicar-upload.chart" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.upload.persistence.size }}
+  {{- if .Values.upload.persistence.storageClass }}
+  storageClassName: {{ .Values.upload.persistence.storageClass }}
+  {{- end }}
+{{- end }}

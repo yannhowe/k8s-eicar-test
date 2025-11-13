@@ -1,0 +1,6 @@
+apiVersion: v2
+name: eicar-upload
+description: Simple file upload harness for testing EICAR sample handling
+version: 0.1.0
+appVersion: "0.1.0"
+type: application
