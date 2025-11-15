@@ -9,31 +9,32 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
 app.config["UPLOAD_DIR"] = UPLOAD_DIR
 
-FORM_HTML = """<!DOCTYPE html>
-<html lang=\"en\">
+FORM_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
 <head>
-    <meta charset=\"UTF-8\" />
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
-    <title>EICAR Upload Harness</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
     <style>
-        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 2rem; background: #f5f6fa; }
-        main { max-width: 480px; margin: 0 auto; background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.08); }
-        h1 { margin-top: 0; }
-        form { display: flex; flex-direction: column; gap: 1rem; }
-        input[type=\"file\"] { padding: 0.4rem; }
-        button { padding: 0.8rem 1.2rem; border: none; border-radius: 8px; background: #1b4bff; color: white; font-size: 1rem; cursor: pointer; }
-        button:hover { background: #163dcc; }
-        .note { font-size: 0.9rem; color: #555; }
+        body {{ font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 2rem; background: #f5f6fa; }}
+        main {{ max-width: 480px; margin: 0 auto; background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.08); }}
+        h1 {{ margin-top: 0; }}
+        form {{ display: flex; flex-direction: column; gap: 1rem; }}
+        input[type="file"] {{ padding: 0.4rem; }}
+        button {{ padding: 0.8rem 1.2rem; border: none; border-radius: 8px; background: #1b4bff; color: white; font-size: 1rem; cursor: pointer; }}
+        button:hover {{ background: #163dcc; }}
+        .note {{ font-size: 0.9rem; color: #555; }}
     </style>
 </head>
 <body>
     <main>
-        <h1>EICAR Upload Harness</h1>
-        <p class=\"note\">Upload a file (for example the <a href=\"https://www.eicar.org/download-anti-malware-testfile/\" target=\"_blank\" rel=\"noopener noreferrer\">EICAR test string</a>). The server writes it directly to its local disk for downstream scanner testing.</p>
-        <form action=\"/upload\" method=\"post\" enctype=\"multipart/form-data\">
-            <input type=\"file\" name=\"file\" required />
-            <button type=\"submit\">Upload</button>
+        <h1>{title}</h1>
+        <p class="note">{description}</p>
+        <form action="{action}" method="post" enctype="multipart/form-data">
+            <input type="file" name="file" required />
+            <button type="submit">Upload</button>
         </form>
+        {toggle}
     </main>
 </body>
 </html>"""
@@ -43,13 +44,33 @@ def _error(message: str, status: int = 400) -> Response:
     return Response(message + "\n", status=status, mimetype="text/plain")
 
 
-@app.get("/")
-def index() -> Response:
-    return Response(FORM_HTML, mimetype="text/html")
+def _render_form(title: str, description: str, action: str, toggle_href: str | None, toggle_label: str | None) -> Response:
+    toggle_html = ""
+    if toggle_href and toggle_label:
+        toggle_html = f'<p class="note"><a href="{toggle_href}">{toggle_label}</a></p>'
+    html = FORM_TEMPLATE.format(title=title, description=description, action=action, toggle=toggle_html)
+    return Response(html, mimetype="text/html")
 
 
-@app.post("/upload")
-def upload() -> Response:
+def _save_stream(file_storage, target_path: Path) -> None:
+    """Write the uploaded file to disk using low-level os.write to avoid buffering the whole file."""
+    fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        while True:
+            chunk = file_storage.stream.read(1024 * 1024)  # 1 MiB chunks
+            if not chunk:
+                break
+            os.write(fd, chunk)
+    finally:
+        os.close(fd)
+
+
+def _save_via_flask(file_storage, target_path: Path) -> None:
+    """Write via Werkzeug/FileStorage.save (Python-managed file write)."""
+    file_storage.save(target_path)
+
+
+def _handle_upload(save_func) -> Response:
     if "file" not in request.files:
         return _error("Missing file part", 400)
 
@@ -63,8 +84,56 @@ def upload() -> Response:
 
     target_path = app.config["UPLOAD_DIR"] / filename
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    file.save(target_path)
+    file.stream.seek(0)  # ensure we're at the start
+    save_func(file, target_path)
     return Response(f"Stored {filename} to {target_path}\n", mimetype="text/plain")
+
+
+@app.get("/")
+def index() -> Response:
+    return redirect(url_for("upload_os_form"))
+
+
+@app.get("/upload")
+def upload_form_alias() -> Response:
+    return redirect(url_for("upload_os_form"))
+
+
+@app.get("/upload-os")
+def upload_os_form() -> Response:
+    return _render_form(
+        title="EICAR Upload (os.write)",
+        description="Upload a file (e.g., the EICAR test string). This path streams to disk using low-level os.write in 1 MiB chunks.",
+        action=url_for("upload_os"),
+        toggle_href=url_for("upload_python_form"),
+        toggle_label="Switch to Python-managed file.save",
+    )
+
+
+@app.post("/upload-os")
+def upload_os() -> Response:
+    return _handle_upload(_save_stream)
+
+
+@app.post("/upload")
+def upload() -> Response:
+    return upload_os()
+
+
+@app.get("/upload-python")
+def upload_python_form() -> Response:
+    return _render_form(
+        title="EICAR Upload (Flask save)",
+        description="Upload a file (e.g., the EICAR test string). This path uses Flask/Werkzeug FileStorage.save.",
+        action=url_for("upload_python"),
+        toggle_href=url_for("upload_os_form"),
+        toggle_label="Switch to os.write streaming",
+    )
+
+
+@app.post("/upload-python")
+def upload_python() -> Response:
+    return _handle_upload(_save_via_flask)
 
 
 @app.get("/healthz")

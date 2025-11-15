@@ -114,6 +114,11 @@ Key knobs in `values.yaml`:
 3. Open http://localhost:8080 and upload the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/).
 4. Exec into the pod or inspect the mounted volume to confirm the file exists under `/data/uploads` (or your configured path).
 
+### Upload endpoints (two options)
+
+- `/upload` (alias: `/upload-os`): streams to disk via low-level `os.write` in 1 MiB chunks.
+- `/upload-python`: writes via Flask/Werkzeug `FileStorage.save`.
+
 ### Uploading from the CLI (no browser required)
 
 If you are on a headless server, you can still exercise the endpoint via `curl`. First create the EICAR sample locally, appending a timestamp to avoid name collisions:
