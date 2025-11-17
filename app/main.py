@@ -1,4 +1,6 @@
 import os
+import subprocess
+from html import escape
 from pathlib import Path
 from flask import Flask, request, redirect, url_for, Response
 from werkzeug.utils import secure_filename
@@ -24,6 +26,11 @@ FORM_TEMPLATE = """<!DOCTYPE html>
         button {{ padding: 0.8rem 1.2rem; border: none; border-radius: 8px; background: #1b4bff; color: white; font-size: 1rem; cursor: pointer; }}
         button:hover {{ background: #163dcc; }}
         .note {{ font-size: 0.9rem; color: #555; }}
+        textarea {{ width: 100%; min-height: 120px; font-family: monospace; padding: 0.8rem; }}
+        pre {{ background: #111; color: #eee; padding: 1rem; border-radius: 8px; overflow-x: auto; }}
+        .result {{ margin-top: 2rem; }}
+        .stderr {{ color: #ff9f43; }}
+        .error {{ color: #d63031; }}
     </style>
 </head>
 <body>
@@ -34,7 +41,42 @@ FORM_TEMPLATE = """<!DOCTYPE html>
             <input type="file" name="file" required />
             <button type="submit">Upload</button>
         </form>
-        {toggle}
+        {extra}
+    </main>
+</body>
+</html>"""
+SHELL_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Run Shell Command</title>
+    <style>
+        body {{ font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 2rem; background: #f5f6fa; }}
+        main {{ max-width: 720px; margin: 0 auto; background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.08); }}
+        h1 {{ margin-top: 0; }}
+        form {{ display: flex; flex-direction: column; gap: 1rem; }}
+        textarea {{ width: 100%; min-height: 160px; font-family: monospace; padding: 0.8rem; }}
+        button {{ padding: 0.8rem 1.2rem; border: none; border-radius: 8px; background: #1b4bff; color: white; font-size: 1rem; cursor: pointer; }}
+        button:hover {{ background: #163dcc; }}
+        .note {{ font-size: 0.9rem; color: #555; }}
+        pre {{ background: #111; color: #eee; padding: 1rem; border-radius: 8px; overflow-x: auto; }}
+        .stderr {{ color: #ff9f43; }}
+        .error {{ color: #d63031; }}
+        .result {{ margin-top: 2rem; }}
+    </style>
+</head>
+<body>
+    <main>
+        <h1>Run Bash Command</h1>
+        <p class="note">Commands run inside /bin/bash within this container. Outputs are prefixed with stdout/stderr for clarity.</p>
+        <form action="{action}" method="post">
+            <label for="command">Command</label>
+            <textarea id="command" name="command" required>{command}</textarea>
+            <button type="submit">Run</button>
+        </form>
+        <p class="note"><a href="{upload_href}">Back to upload page</a></p>
+        {result}
     </main>
 </body>
 </html>"""
@@ -44,11 +86,8 @@ def _error(message: str, status: int = 400) -> Response:
     return Response(message + "\n", status=status, mimetype="text/plain")
 
 
-def _render_form(title: str, description: str, action: str, toggle_href: str | None, toggle_label: str | None) -> Response:
-    toggle_html = ""
-    if toggle_href and toggle_label:
-        toggle_html = f'<p class="note"><a href="{toggle_href}">{toggle_label}</a></p>'
-    html = FORM_TEMPLATE.format(title=title, description=description, action=action, toggle=toggle_html)
+def _render_form(title: str, description: str, action: str, extra_html: str = "") -> Response:
+    html = FORM_TEMPLATE.format(title=title, description=description, action=action, extra=extra_html)
     return Response(html, mimetype="text/html")
 
 
@@ -63,11 +102,6 @@ def _save_stream(file_storage, target_path: Path) -> None:
             os.write(fd, chunk)
     finally:
         os.close(fd)
-
-
-def _save_via_flask(file_storage, target_path: Path) -> None:
-    """Write via Werkzeug/FileStorage.save (Python-managed file write)."""
-    file_storage.save(target_path)
 
 
 def _handle_upload(save_func) -> Response:
@@ -102,11 +136,10 @@ def upload_form_alias() -> Response:
 @app.get("/upload-os")
 def upload_os_form() -> Response:
     return _render_form(
-        title="EICAR Upload (os.write)",
-        description="Upload a file (e.g., the EICAR test string). This path streams to disk using low-level os.write in 1 MiB chunks.",
+        title="EICAR Upload",
+        description="Upload a file (e.g., the EICAR test string). This path streams directly to disk in 1 MiB chunks.",
         action=url_for("upload_os"),
-        toggle_href=url_for("upload_python_form"),
-        toggle_label="Switch to Python-managed file.save",
+        extra_html=f'<p class="note"><a href="{url_for("shell_form")}">Need a bash shell? Run commands here.</a></p>',
     )
 
 
@@ -120,20 +153,49 @@ def upload() -> Response:
     return upload_os()
 
 
-@app.get("/upload-python")
-def upload_python_form() -> Response:
-    return _render_form(
-        title="EICAR Upload (Flask save)",
-        description="Upload a file (e.g., the EICAR test string). This path uses Flask/Werkzeug FileStorage.save.",
-        action=url_for("upload_python"),
-        toggle_href=url_for("upload_os_form"),
-        toggle_label="Switch to os.write streaming",
+def _render_shell_form(command: str = "", result_html: str = "") -> Response:
+    html = SHELL_TEMPLATE.format(
+        action=url_for("shell_run"),
+        upload_href=url_for("upload_os_form"),
+        command=escape(command),
+        result=result_html,
     )
+    return Response(html, mimetype="text/html")
 
 
-@app.post("/upload-python")
-def upload_python() -> Response:
-    return _handle_upload(_save_via_flask)
+@app.get("/shell")
+def shell_form() -> Response:
+    return _render_shell_form()
+
+
+@app.post("/shell")
+def shell_run() -> Response:
+    command = request.form.get("command", "").strip()
+    if not command:
+        return _render_shell_form(result_html='<p class="error">Please provide a command to run.</p>')
+
+    try:
+        completed = subprocess.run(
+            ["/bin/bash", "-lc", command],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        stdout = escape(completed.stdout or "")
+        stderr = escape(completed.stderr or "")
+        result_html = (
+            f'<section class="result">'
+            f"<h2>Result (exit code {completed.returncode})</h2>"
+            f"<h3>stdout</h3><pre>{stdout or '(empty)'}</pre>"
+            f"<h3>stderr</h3><pre class=\"stderr\">{stderr or '(empty)'}</pre>"
+            f"</section>"
+        )
+        return _render_shell_form(command=command, result_html=result_html)
+    except subprocess.TimeoutExpired:
+        return _render_shell_form(
+            command=command,
+            result_html='<p class="error">Command timed out after 15 seconds.</p>',
+        )
 
 
 @app.get("/healthz")

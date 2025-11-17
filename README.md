@@ -12,7 +12,7 @@ export UPLOAD_DIR=$PWD/uploads
 python -m app.main
 ```
 
-Then open <http://localhost:8080> and upload a file. Uploaded files are saved to the directory referenced by `UPLOAD_DIR`.
+Then open <http://localhost:8080> and upload a file. Uploaded files are saved to the directory referenced by `UPLOAD_DIR`. Need to run a quick command in the container? Visit <http://localhost:8080/shell> for a simple bash runner.
 
 ## Container build
 
@@ -114,10 +114,13 @@ Key knobs in `values.yaml`:
 3. Open http://localhost:8080 and upload the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/).
 4. Exec into the pod or inspect the mounted volume to confirm the file exists under `/data/uploads` (or your configured path).
 
-### Upload endpoints (two options)
+### Upload endpoint
 
-- `/upload` (alias: `/upload-os`): streams to disk via low-level `os.write` in 1 MiB chunks.
-- `/upload-python`: writes via Flask/Werkzeug `FileStorage.save`.
+`/upload` (alias: `/upload-os`) streams the incoming file directly to disk in 1 MiB chunks so large payloads never reside fully in memory.
+
+### Browser-based bash runner
+
+Browse to `/shell` to run adhoc commands through `/bin/bash`. This is handy for double-checking the uploads directory (e.g., `ls -l /data/uploads`) without having to `kubectl exec` into the pod. Output for stdout and stderr are shown separately, with a 15 second timeout per command.
 
 ### Uploading from the CLI (no browser required)
 

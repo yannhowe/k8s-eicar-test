@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -7,12 +7,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apk add --no-cache bash curl
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-RUN useradd --create-home appuser \
+RUN adduser -D -h /home/appuser appuser \
     && mkdir -p ${UPLOAD_DIR} \
     && chown -R appuser:appuser /app ${UPLOAD_DIR}
 
